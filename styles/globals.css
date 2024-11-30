@@ -1,0 +1,8 @@
+/* Update slider styles */
+input[type="range"] {
+  @apply h-0.5 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  @apply w-2 h-2 appearance-none bg-blue-600 rounded-full cursor-pointer;
+}
