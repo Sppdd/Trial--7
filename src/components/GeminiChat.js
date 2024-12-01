@@ -74,11 +74,7 @@ const GeminiChat = () => {
       const prompt = {
         contents: [{
           parts: [{
-            text: `You are a helpful assistant analyzing Chrome browser performance and activities.
-                   Your role is to analyze process data and browser activities.
-                   Always answer in 5 words or less.
-                   Be direct and specific in your responses.
-
+            text: `You analyze Chrome processes. Answer in 35 words. And responed with fun tone. In the end suggest a follow up recommendation.
                    Current Process Data:
                    ${processLogs || 'No process data available'}
 
@@ -126,10 +122,7 @@ const GeminiChat = () => {
   };
 
   const getRawPrompt = () => {
-    const prompt = `System: You are a helpful assistant analyzing Chrome browser performance and activities.
-Your role is to analyze process data and browser activities.
-Always answer in 5 words or less.
-Be direct and specific in your responses.
+    const prompt = `You analyze Chrome processes. Answer in 35 words. And responed with fun tone. In the end suggest a follow up recommendation.
 
 Current Process Data:
 ${processLogs || 'No process data available'}

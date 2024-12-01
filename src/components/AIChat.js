@@ -41,10 +41,10 @@ const AIChat = () => {
         setModelStatus('ready');
         
         const newSession = await chrome.aiOriginTrial.languageModel.create({
-          systemPrompt: 'You analyze Chrome processes. Answer in 5 words.',  // Extremely simple system prompt
-          temperature: 0.1,  // Very low temperature for consistent responses
-          topK: 1,
-          maxOutputTokens: 10
+          systemPrompt: 'You analyze Chrome processes. Answer in 35 words. And responed with fun tone. In the end suggest a follow up recommendation',  // Extremely simple system prompt
+          temperature: 0.9,  
+          topK: 6,
+          maxOutputTokens: 35
         });
 
         if (!newSession) {
@@ -128,10 +128,7 @@ const AIChat = () => {
   // Update estimateTokens to match new system prompt
   const estimateTokens = (text, currentLogs = processLogs) => {
     if (!text && !currentLogs) return 0;
-    const systemPrompt = `You are a helpful assistant analyzing Chrome browser performance.
-Your role is to analyze process data and provide insights.
-Always answer in 5 words or less.
-Be direct and specific in your responses.
+    const systemPrompt = `You analyze Chrome processes. Answer in 35 words. And responed with fun tone. In the end suggest a follow up recommendation.
 Process Logs: ${currentLogs}`;
     const totalText = systemPrompt + '\nUser: ' + text;
     return Math.ceil(totalText.length / 4);
@@ -161,9 +158,7 @@ Process Logs: ${currentLogs}`;
 
   // Update getRawPrompt to show only memory data
   const getRawPrompt = () => {
-    const prompt = `System: You analyze Chrome memory usage.
-Always answer in 5 words or less.
-Be direct and specific.
+    const prompt = `You analyze Chrome processes. Answer in 35 words. And responed with fun tone. In the end suggest a follow up recommendation.
 
 ${processLogs ? 'Memory Usage:\n' + processLogs : 'No memory data available'}
 
