@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { getProcessLogs, logProcessData } from '../utils/processDataLogger';
+import { getProcessLogs, logProcessData, initializeRealTimeUpdates, subscribeToUpdates } from '../utils/processDataLogger';
+import { API_KEYS, AI_CONFIG } from '../config/secrets';
+import GeminiChat from './GeminiChat';
 
 const AIChat = () => {
   const [input, setInput] = useState('');
@@ -13,24 +15,24 @@ const AIChat = () => {
   const [showRawPrompt, setShowRawPrompt] = useState(false);
   const [tokenCount, setTokenCount] = useState(0);
   const [processLogs, setProcessLogs] = useState('');
+  const [selectedModel, setSelectedModel] = useState('chrome'); // 'chrome' or 'gemini'
 
-  // Add session validity check function
+  // Update session validity check function to be less strict
   const isSessionValid = async (currentSession) => {
-    if (!currentSession || !currentSession.prompt) return false;
+    if (!currentSession) return false;
     try {
-      // Try a simple test prompt to verify session
-      await currentSession.prompt('test', { silent: true });
-      return true;
+      // Just check if the session object exists and has the required methods
+      return typeof currentSession.prompt === 'function';
     } catch (err) {
       console.log('Session validation failed:', err);
       return false;
     }
   };
 
-  // Update checkAvailability with simpler system prompt
+  // Update checkAvailability with minimal configuration
   const checkAvailability = async () => {
     try {
-      if (!chrome.aiOriginTrial?.languageModel) {
+      if (!chrome.runtime.id || !chrome.aiOriginTrial?.languageModel) {
         throw new Error('AI Language Model API not available');
       }
 
@@ -40,133 +42,87 @@ const AIChat = () => {
       if (caps?.available === 'readily') {
         setModelStatus('ready');
         
-        // Create new session with simplified system prompt
         const newSession = await chrome.aiOriginTrial.languageModel.create({
-          systemPrompt: `You are a helpful assistant analyzing Chrome browser performance.
-            Your role is to analyze process data and provide insights.
-            Always answer in 5 words or less.
-            Be direct and specific in your responses.`,
-          temperature: temperature,
-          topK: topK,
-          maxOutputTokens: 10,
-          timeoutSeconds: 30,
+          systemPrompt: 'You analyze Chrome processes. Answer in 5 words.',  // Extremely simple system prompt
+          temperature: 0.1,  // Very low temperature for consistent responses
+          topK: 1,
+          maxOutputTokens: 10
         });
 
-        // Validate new session before setting
-        if (await isSessionValid(newSession)) {
-          setSession(newSession);
-          setError(null);
-        } else {
-          throw new Error('Failed to create valid session');
+        if (!newSession) {
+          throw new Error('Session creation failed');
         }
-      } else if (caps?.available === 'after-download') {
-        setModelStatus('downloading');
-        setError('Model needs to be downloaded first. This may take a moment.');
-        const downloadSession = await chrome.aiOriginTrial.languageModel.create({
-          systemPrompt: 'You are a helpful assistant. Always answer in 5 words or less.',
-          temperature: temperature,
-          topK: topK,
-          monitor(m) {
-            m.addEventListener("downloadprogress", (e) => {
-              const progress = Math.round((e.loaded / e.total) * 100);
-              setError(`Downloading model: ${progress}%`);
-              if (progress === 100) {
-                setModelStatus('ready');
-                setError(null);
-              }
-            });
-          },
-        });
-        setSession(downloadSession);
+
+        setSession(newSession);
+        setError(null);
       } else {
         setModelStatus('unavailable');
         throw new Error('AI model is not available');
       }
     } catch (err) {
       console.error('AI availability check error:', err);
-      setError(err.message || 'Error checking AI availability');
+      setError(err.message);
       setModelStatus('error');
     }
   };
 
-  // Add session refresh interval
-  useEffect(() => {
-    checkAvailability();
-    
-    // Refresh session every 15 minutes to prevent expiration
-    const refreshInterval = setInterval(async () => {
-      console.log('Checking session validity...');
-      if (session && !(await isSessionValid(session))) {
-        console.log('Session expired, refreshing...');
-        await checkAvailability();
-      }
-    }, 15 * 60 * 1000); // 15 minutes
-
-    return () => {
-      clearInterval(refreshInterval);
-      if (session && typeof session.destroy === 'function') {
-        try {
-          session.destroy();
-        } catch (err) {
-          console.error('Error destroying session:', err);
-        }
-      }
-    };
-  }, []);
-
-  // Update handleSubmit to include process data with user input
+  // Update handleSubmit to use full process data
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!input.trim()) return;
-
-    // Validate session before use
-    if (!(await isSessionValid(session))) {
-      console.log('Session invalid, recreating...');
-      await checkAvailability();
-      if (!session) {
-        setError('Unable to create AI session. Please try again.');
-        return;
-      }
-    }
+    if (!input.trim() || !session) return;
 
     setIsLoading(true);
     setMessages(prev => [...prev, { role: 'user', content: input }]);
 
     try {
-      // Get fresh process data
+      // Get full process data
       const processes = await chrome.processes.getProcessInfo([], true);
       const latestLogs = await logProcessData(processes);
       
-      // Combine user input with process data
-      const fullPrompt = `Current Process Data:
-${latestLogs || 'No process data available'}
+      // Create prompt with full process data
+      const prompt = `Process Data: ${latestLogs || 'No data available'}
+Question: ${input}`;
+      console.log('Sending prompt:', prompt);  // Debug log
 
-User Question: ${input}
-
-Analyze the above process data and answer the question.`;
-
-      // Attempt prompt with validation
-      const response = await session.prompt(fullPrompt);
-      console.log('Response:', response);
-      setMessages(prev => [...prev, { role: 'assistant', content: response }]);
-      setInput('');
-      setError(null);
+      try {
+        const response = await session.prompt(prompt);
+        console.log('Got response:', response);  // Debug log
+        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+        setInput('');
+        setError(null);
+      } catch (promptError) {
+        console.error('Prompt error:', promptError);
+        // Try one more time with simpler prompt
+        const retryPrompt = input.slice(0, 50);  // Limit input length
+        const response = await session.prompt(retryPrompt);
+        setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+        setInput('');
+        setError(null);
+      }
     } catch (err) {
       console.error('Chat error:', err);
-      if (err instanceof DOMException || err.message.includes('session')) {
-        await checkAvailability();
-        setError('Session expired. Please try again.');
-      } else {
-        setError(`Failed to get response: ${err.message}`);
-      }
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: 'Failed to analyze. Please try again.' 
-      }]);
+      setError('Model error. Please reload the extension.');
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Remove the real-time updates and keep only initial load
+  useEffect(() => {
+    const initializeAI = async () => {
+      try {
+        await checkAvailability();
+        const logs = await getProcessLogs();
+        if (logs) {
+          setProcessLogs(logs);
+        }
+      } catch (err) {
+        console.error('Initialization error:', err);
+      }
+    };
+
+    initializeAI();
+  }, []);
 
   // Update estimateTokens to match new system prompt
   const estimateTokens = (text, currentLogs = processLogs) => {
@@ -202,15 +158,28 @@ Process Logs: ${currentLogs}`;
     );
   };
 
-  // Update getRawPrompt to match new format
+  // Update getRawPrompt to use latest process logs
   const getRawPrompt = () => {
+    // Fetch latest logs if needed
+    const fetchLatestLogs = async () => {
+      const logs = await getProcessLogs();
+      if (logs) {
+        setProcessLogs(logs);
+      }
+    };
+
+    // Try to get latest logs when showing raw prompt
+    if (!processLogs) {
+      fetchLatestLogs();
+    }
+
     const prompt = `System: You are a helpful assistant analyzing Chrome browser performance.
 Your role is to analyze process data and provide insights.
 Always answer in 5 words or less.
 Be direct and specific in your responses.
 
 Current Process Data:
-${processLogs || 'Waiting for process data...'}
+${processLogs || 'No process data available'}
 
 User Question: ${input}
 
@@ -220,122 +189,153 @@ Analyze the above process data and answer the question.`;
     return prompt;
   };
 
+  // Add model selector component
+  const ModelSelector = () => (
+    <div className="flex items-center gap-2 mb-4">
+      <span className="text-sm text-gray-600">Model:</span>
+      <select
+        value={selectedModel}
+        onChange={(e) => setSelectedModel(e.target.value)}
+        className="px-2 py-1 border rounded text-sm"
+        disabled={isLoading}
+      >
+        <option value="chrome">Gemini Nano</option>
+        <option value="gemini">Gemini Flash</option>
+      </select>
+    </div>
+  );
+
+  // Update the return statement to include model selection
   return (
     <div className="flex flex-col h-full min-h-[600px]">
-      {/* Header */}
       <div className="flex justify-between items-center mb-4 p-4 bg-white border-b">
         <h2 className="text-xl font-semibold">AI Assistant</h2>
         <div className="flex items-center gap-4">
-          <div className="flex flex-col w-32">
-            <label className="text-sm text-gray-600">Temperature</label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.1"
-              value={temperature}
-              onChange={(e) => setTemperature(parseFloat(e.target.value))}
-              className="h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            />
-            <span className="text-xs text-gray-500 mt-1">{temperature}</span>
-          </div>
-          <div className="flex flex-col w-32">
-            <label className="text-sm text-gray-600">Top-K</label>
-            <input
-              type="range"
-              min="1"
-              max="8"
-              value={topK}
-              onChange={(e) => setTopK(parseInt(e.target.value))}
-              className="h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            />
-            <span className="text-xs text-gray-500 mt-1">{topK}</span>
-          </div>
+          <ModelSelector />
+          {selectedModel === 'chrome' && (
+            <>
+              <div className="flex flex-col w-32">
+                <label className="text-sm text-gray-600">Temperature</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={temperature}
+                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                  className="h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+                <span className="text-xs text-gray-500 mt-1">{temperature}</span>
+              </div>
+              <div className="flex flex-col w-32">
+                <label className="text-sm text-gray-600">Top-K</label>
+                <input
+                  type="range"
+                  min="1"
+                  max="8"
+                  value={topK}
+                  onChange={(e) => setTopK(parseInt(e.target.value))}
+                  className="h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                />
+                <span className="text-xs text-gray-500 mt-1">{topK}</span>
+              </div>
+            </>
+          )}
           <div className="flex items-center gap-2">
+            {selectedModel === 'chrome' && (
+              <button
+                onClick={checkAvailability}
+                className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+              >
+                Restart Session
+              </button>
+            )}
+            {selectedModel === 'chrome' && getStatusBadge()}
+          </div>
+        </div>
+      </div>
+
+      {/* Render appropriate chat interface based on selected model */}
+      {selectedModel === 'chrome' ? (
+        // Original Chrome AI chat interface
+        <>
+          {/* Messages */}
+          <div className="flex-1 overflow-auto mb-4 space-y-4 p-4 border rounded-lg">
+            {messages.map((msg, index) => (
+              <div
+                key={index}
+                className={`p-3 rounded-lg ${
+                  msg.role === 'user' 
+                    ? 'bg-blue-50 ml-auto max-w-[80%]' 
+                    : 'bg-gray-50 mr-auto max-w-[80%]'
+                }`}
+              >
+                <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+              </div>
+            ))}
+            {isLoading && (
+              <div className="bg-gray-50 p-3 rounded-lg mr-auto">
+                <p className="text-sm">Thinking...</p>
+              </div>
+            )}
+          </div>
+
+          {/* Raw prompt display with process logs */}
+          {showRawPrompt && (
+            <div className="mx-4 mb-4 p-3 bg-gray-50 rounded-lg">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs text-gray-500">Raw Prompt</span>
+                <span className="text-xs text-gray-500">
+                  Last Updated: {new Date().toLocaleTimeString()}
+                </span>
+              </div>
+              <pre className="text-xs overflow-auto max-h-48 whitespace-pre-wrap">
+                {getRawPrompt()}
+              </pre>
+            </div>
+          )}
+
+          {/* Error display */}
+          {error && (
+            <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-sm text-red-600">{error}</p>
+            </div>
+          )}
+
+          {/* Input area */}
+          <form onSubmit={handleSubmit} className="flex gap-2 p-4">
             <button
-              onClick={checkAvailability}
-              className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+              type="button"
+              onClick={() => setShowRawPrompt(!showRawPrompt)}
+              className="px-3 py-2 bg-gray-100 text-gray-600 rounded hover:bg-gray-200"
             >
-              Restart Session
+              {showRawPrompt ? 'Hide Raw' : 'Show Raw'}
             </button>
-            {getStatusBadge()}
-          </div>
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-auto mb-4 space-y-4 p-4 border rounded-lg">
-        {messages.map((msg, index) => (
-          <div
-            key={index}
-            className={`p-3 rounded-lg ${
-              msg.role === 'user' 
-                ? 'bg-blue-50 ml-auto max-w-[80%]' 
-                : 'bg-gray-50 mr-auto max-w-[80%]'
-            }`}
-          >
-            <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-          </div>
-        ))}
-        {isLoading && (
-          <div className="bg-gray-50 p-3 rounded-lg mr-auto">
-            <p className="text-sm">Thinking...</p>
-          </div>
-        )}
-      </div>
-
-      {/* Raw prompt display with process logs */}
-      {showRawPrompt && (
-        <div className="mx-4 mb-4 p-3 bg-gray-50 rounded-lg">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-xs text-gray-500">Raw Prompt</span>
-            <span className="text-xs text-gray-500">
-              Last Updated: {new Date().toLocaleTimeString()}
-            </span>
-          </div>
-          <pre className="text-xs overflow-auto max-h-48 whitespace-pre-wrap">
-            {getRawPrompt()}
-          </pre>
-        </div>
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                value={input}
+                onChange={handleInputChange}
+                placeholder="Type your message..."
+                className="w-full px-4 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 pr-16"
+                disabled={isLoading || modelStatus !== 'ready'}
+              />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-gray-100 rounded text-xs text-gray-600">
+                {tokenCount} tokens
+              </div>
+            </div>
+            <button
+              type="submit"
+              disabled={isLoading || modelStatus !== 'ready' || !input.trim()}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:bg-gray-400"
+            >
+              Send
+            </button>
+          </form>
+        </>
+      ) : (
+        <GeminiChat />
       )}
-
-      {/* Error display */}
-      {error && (
-        <div className="mx-4 mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-          <p className="text-sm text-red-600">{error}</p>
-        </div>
-      )}
-
-      {/* Input area */}
-      <form onSubmit={handleSubmit} className="flex gap-2 p-4">
-        <button
-          type="button"
-          onClick={() => setShowRawPrompt(!showRawPrompt)}
-          className="px-3 py-2 bg-gray-100 text-gray-600 rounded hover:bg-gray-200"
-        >
-          {showRawPrompt ? 'Hide Raw' : 'Show Raw'}
-        </button>
-        <div className="flex-1 relative">
-          <input
-            type="text"
-            value={input}
-            onChange={handleInputChange}
-            placeholder="Type your message..."
-            className="w-full px-4 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 pr-16"
-            disabled={isLoading || modelStatus !== 'ready'}
-          />
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-gray-100 rounded text-xs text-gray-600">
-            {tokenCount} tokens
-          </div>
-        </div>
-        <button
-          type="submit"
-          disabled={isLoading || modelStatus !== 'ready' || !input.trim()}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:bg-gray-400"
-        >
-          Send
-        </button>
-      </form>
     </div>
   );
 };
