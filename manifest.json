@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Task Manager",
   "version": "1.0",
-  "description": "A powerful task manager powered by Google's Gemini Neno built-in Model, Helps your to figure out the why your browswer is slow, and how to optimize it.",
+  "description": "A powerful Ai task manager powered by Google's Gemini Nano (Chrome's built-in AI) and Gemini Flash Models.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
