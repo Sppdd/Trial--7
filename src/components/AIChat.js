@@ -10,12 +10,10 @@ const AIChat = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [modelStatus, setModelStatus] = useState('checking');
-  const [temperature, setTemperature] = useState(1.0);
-  const [topK, setTopK] = useState(3);
   const [showRawPrompt, setShowRawPrompt] = useState(false);
   const [tokenCount, setTokenCount] = useState(0);
   const [processLogs, setProcessLogs] = useState('');
-  const [selectedModel, setSelectedModel] = useState('chrome'); // 'chrome' or 'gemini'
+  const [selectedModel, setSelectedModel] = useState('chrome');
 
   // Update session validity check function to be less strict
   const isSessionValid = async (currentSession) => {
@@ -66,7 +64,7 @@ const AIChat = () => {
     }
   };
 
-  // Update handleSubmit to use full process data
+  // Update handleSubmit with extremely simplified prompt
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!input.trim() || !session) return;
@@ -75,13 +73,16 @@ const AIChat = () => {
     setMessages(prev => [...prev, { role: 'user', content: input }]);
 
     try {
-      // Get full process data
+      // Get only essential process data
       const processes = await chrome.processes.getProcessInfo([], true);
-      const latestLogs = await logProcessData(processes);
-      
-      // Create prompt with full process data
-      const prompt = `Process Data: ${latestLogs || 'No data available'}
-Question: ${input}`;
+      const highCPUProcesses = Object.values(processes)
+        .filter(p => p.cpu > 5)  // Only processes using >5% CPU
+        .map(p => `${p.tasks?.[0]?.title || 'unnamed'}: ${p.cpu.toFixed(1)}% CPU`)
+        .slice(0, 3)  // Only top 3 processes
+        .join(', ');
+
+      // Create a very simple prompt
+      const prompt = `High CPU processes: ${highCPUProcesses || 'None'}. ${input}`;
       console.log('Sending prompt:', prompt);  // Debug log
 
       try {
@@ -92,7 +93,7 @@ Question: ${input}`;
         setError(null);
       } catch (promptError) {
         console.error('Prompt error:', promptError);
-        // Try one more time with simpler prompt
+        // Try one more time with even simpler prompt
         const retryPrompt = input.slice(0, 50);  // Limit input length
         const response = await session.prompt(retryPrompt);
         setMessages(prev => [...prev, { role: 'assistant', content: response }]);
@@ -158,34 +159,18 @@ Process Logs: ${currentLogs}`;
     );
   };
 
-  // Update getRawPrompt to use latest process logs
+  // Update getRawPrompt to show only memory data
   const getRawPrompt = () => {
-    // Fetch latest logs if needed
-    const fetchLatestLogs = async () => {
-      const logs = await getProcessLogs();
-      if (logs) {
-        setProcessLogs(logs);
-      }
-    };
-
-    // Try to get latest logs when showing raw prompt
-    if (!processLogs) {
-      fetchLatestLogs();
-    }
-
-    const prompt = `System: You are a helpful assistant analyzing Chrome browser performance.
-Your role is to analyze process data and provide insights.
+    const prompt = `System: You analyze Chrome memory usage.
 Always answer in 5 words or less.
-Be direct and specific in your responses.
+Be direct and specific.
 
-Current Process Data:
-${processLogs || 'No process data available'}
+${processLogs ? 'Memory Usage:\n' + processLogs : 'No memory data available'}
 
 User Question: ${input}
 
-Analyze the above process data and answer the question.`;
+Analyze memory usage and answer the question.`;
     
-    console.log('Raw prompt:', prompt);
     return prompt;
   };
 
@@ -212,35 +197,6 @@ Analyze the above process data and answer the question.`;
         <h2 className="text-xl font-semibold">AI Assistant</h2>
         <div className="flex items-center gap-4">
           <ModelSelector />
-          {selectedModel === 'chrome' && (
-            <>
-              <div className="flex flex-col w-32">
-                <label className="text-sm text-gray-600">Temperature</label>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.1"
-                  value={temperature}
-                  onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                  className="h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="text-xs text-gray-500 mt-1">{temperature}</span>
-              </div>
-              <div className="flex flex-col w-32">
-                <label className="text-sm text-gray-600">Top-K</label>
-                <input
-                  type="range"
-                  min="1"
-                  max="8"
-                  value={topK}
-                  onChange={(e) => setTopK(parseInt(e.target.value))}
-                  className="h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="text-xs text-gray-500 mt-1">{topK}</span>
-              </div>
-            </>
-          )}
           <div className="flex items-center gap-2">
             {selectedModel === 'chrome' && (
               <button

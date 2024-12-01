@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getProcessLogs, logProcessData, initializeRealTimeUpdates, subscribeToUpdates } from '../utils/processDataLogger';
+import { initializeActivityTracking, getActivityTable, subscribeToActivityUpdates } from '../utils/activityLogger';
 import { API_KEYS, AI_CONFIG } from '../config/secrets';
 
 const GeminiChat = () => {
@@ -8,6 +9,7 @@ const GeminiChat = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [processLogs, setProcessLogs] = useState('');
+  const [activityLogs, setActivityLogs] = useState('');
   const [showRawPrompt, setShowRawPrompt] = useState(false);
 
   useEffect(() => {
@@ -17,25 +19,36 @@ const GeminiChat = () => {
         if (logs) {
           setProcessLogs(logs);
         }
+
+        const activities = await getActivityTable();
+        if (activities) {
+          setActivityLogs(activities);
+        }
       } catch (err) {
         console.error('Error initializing logs:', err);
       }
     };
 
     initializeLogs();
-  }, []);
 
-  useEffect(() => {
-    const unsubscribe = subscribeToUpdates((newLogs) => {
-      setProcessLogs(newLogs);
-      console.log('Gemini received new logs:', newLogs);
+    const cleanupActivity = initializeActivityTracking();
+
+    const unsubscribeActivity = subscribeToActivityUpdates(async () => {
+      const newActivities = await getActivityTable();
+      setActivityLogs(newActivities);
     });
 
-    const cleanup = initializeRealTimeUpdates();
+    const unsubscribeProcess = subscribeToUpdates((newLogs) => {
+      setProcessLogs(newLogs);
+    });
+
+    const cleanupProcess = initializeRealTimeUpdates();
 
     return () => {
-      unsubscribe();
-      cleanup();
+      cleanupActivity();
+      cleanupProcess();
+      unsubscribeActivity();
+      unsubscribeProcess();
     };
   }, []);
 
@@ -49,25 +62,32 @@ const GeminiChat = () => {
     try {
       const processes = await chrome.processes.getProcessInfo([], true);
       const latestLogs = await logProcessData(processes);
+      const latestActivities = await getActivityTable();
       
       if (latestLogs) {
         setProcessLogs(latestLogs);
+      }
+      if (latestActivities) {
+        setActivityLogs(latestActivities);
       }
       
       const prompt = {
         contents: [{
           parts: [{
-            text: `You are a helpful assistant analyzing Chrome browser performance.
-                   Your role is to analyze process data and provide insights.
+            text: `You are a helpful assistant analyzing Chrome browser performance and activities.
+                   Your role is to analyze process data and browser activities.
                    Always answer in 5 words or less.
                    Be direct and specific in your responses.
 
                    Current Process Data:
                    ${processLogs || 'No process data available'}
 
+                   Recent Browser Activities:
+                   ${activityLogs || 'No activity data available'}
+
                    User Question: ${input}
 
-                   Analyze the above process data and answer the question.`
+                   Analyze the above data and answer the question.`
           }]
         }]
       };
@@ -106,17 +126,20 @@ const GeminiChat = () => {
   };
 
   const getRawPrompt = () => {
-    const prompt = `System: You are a helpful assistant analyzing Chrome browser performance.
-Your role is to analyze process data and provide insights.
+    const prompt = `System: You are a helpful assistant analyzing Chrome browser performance and activities.
+Your role is to analyze process data and browser activities.
 Always answer in 5 words or less.
 Be direct and specific in your responses.
 
 Current Process Data:
 ${processLogs || 'No process data available'}
 
+Recent Browser Activities:
+${activityLogs || 'No activity data available'}
+
 User Question: ${input}
 
-Analyze the above process data and answer the question.`;
+Analyze the above data and answer the question.`;
     
     return prompt;
   };
